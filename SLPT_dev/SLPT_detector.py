@@ -1,6 +1,7 @@
 import argparse
 import os.path
 import sys
+import logging
 sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
 
 from Config import cfg
@@ -160,9 +161,12 @@ class SLPT_Detector():
         cudnn.benchmark = True
         torch.backends.cudnn.enabled = True
 
+        face_detector_ckpt_path = "SLPT_dev/Weight/Face_Detector/yunet_final.pth"
+        face_alignment_ckpt_path = "SLPT_dev/Weight/WFLW_6_layer.pth"
+
         # load face detector
         net = Face_Detector.YuFaceDetectNet(phase='test', size=None)  # initialize detector
-        net = Face_Detector.load_model(net, "/media/ljy/ubuntu_disk1/code/face_detection_label_maker/SLPT_dev/Weight/Face_Detector/yunet_final.pth", True)
+        net = Face_Detector.load_model(net, face_detector_ckpt_path, True)
         net.eval()
         net = net.to(device)
         self.net = net
@@ -174,8 +178,7 @@ class SLPT_Detector():
                                         cfg.TRANSFORMER.FEED_DIM, cfg.WFLW.INITIAL_PATH, cfg)
         model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
 
-        checkpoint_file = "SLPT_dev/Weight/WFLW_6_layer.pth" # os.path.join(args.modelDir, args.checkpoint)
-        checkpoint = torch.load(checkpoint_file)
+        checkpoint = torch.load(face_alignment_ckpt_path)
         pretrained_dict = {k: v for k, v in checkpoint.items()
                         if k in model.module.state_dict().keys()}
         model.module.load_state_dict(pretrained_dict)
@@ -191,13 +194,29 @@ class SLPT_Detector():
             normalize,
         ])
 
-    def detect_faces(self, img):
+    def detect_face(self, img):
+        """
+            detect the faces from the original img, and get the max box with filter rules
+            Args:
+                img: np.array, the original image
+            Returns:
+                bbox: np.array, the max box of the face
+        """
         dets = face_detection(img.copy(), self.net, 320, 240)
         bbox = find_max_box(dets)
         return bbox
 
 
     def adjust_boxes(self, img, bbox):
+        """
+            adjust the bbox to the max value of height and width, and crop the image
+            Args:
+                img: np.array, the original image
+                bbox: np.array, the max box of the face
+            Returns:
+                alignment_input: np.array, the cropped image
+                trans: np.array, the transform matrix    
+        """
         if bbox is not None: 
             bbox[0] = int(bbox[0] / 320.0 * img.shape[1] + 0.5)
             bbox[2] = int(bbox[2] / 320.0 * img.shape[1] + 0.5)
@@ -207,20 +226,28 @@ class SLPT_Detector():
             return alignment_input, trans
         else:
             raise ValueError("No face detected in the image.")
-        # 调整人脸框的大小，输入到landmark模型中
         
 
-    def detect_faces_via_landmarks(self, input_img, trans, naive_bbox):
+    def detect_face_via_landmarks(self, input_img, trans, confidence):
+        """
+            model detects landmarks according the crop img and calculate the bounding box via the max and min values
+            Args:
+                input_img: ndarray, the input image (opencv format)
+                trans: ndarray, the transformation matrix
+                confidence: float, the confidence of the face detection
+            Returns:
+                box_info: dict, the bounding box information, including the box (left-top point and wh), confidence, keypoints and 98 landmarks
+        """
         outputs_initial = self.model(input_img.cuda())
         output = outputs_initial[2][0, -1, :, :].cpu().numpy()
 
         landmark = utils.transform_pixel_v2(output * cfg.MODEL.IMG_SIZE, trans, inverse=True)
-        right_bottom = landmark.max(0)        
+        right_bottom = landmark.max(0)
         left_top = landmark.min(0)
 
         box_info = {
             'box' : [round(left_top[0]), round(left_top[1]), round(right_bottom[0]-left_top[0]), round(right_bottom[1]-left_top[1])],
-            'confidence' : naive_bbox[14],
+            'confidence' : confidence,
             'keypoints' : {
                 'nose': (int(landmark[54][0]), int(landmark[54][1])),
                 'mouth_left': (int(landmark[88][0]), int(landmark[88][1])),
@@ -232,103 +259,198 @@ class SLPT_Detector():
         }
         return box_info
 
-    def detect_faces_from_video(self, video_path):
+    def detect_face_from_opencv_img(self, img):
+        """
+            The whole pipeline for detect face from opencv img (BGR)
+            This function is used for video detection
+            Args:
+                img: np.ndarray, opencv img
+            Returns:
+                fine_bbox: dict, bbox information contains box (left-top point and wh) and landmark98, None if no face detected
+        """
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # TODO test rgb or bgr
+        coarse_bbox = self.detect_face(img)
+        if coarse_bbox is None:
+            return None
+        crop_img, trans = self.adjust_boxes(img, coarse_bbox)
+        fine_bbox = self.detect_face_via_landmarks(crop_img, trans, coarse_bbox[14])
+        fine_bbox.update({"coarse_bbox":coarse_bbox})
+        return fine_bbox
+    
+    def detect_face_from_img_path(self, img_path):
+        """
+            The whole pipeline for detect face from img path
+            Args:
+                img_path: str, the path of the image
+            Returns:
+                fine_bbox: dict, bbox information contains box and landmark98, None if no face detected
+        """
+        img = cv2.imread(img_path)
+        assert img is not None, f"Error: Failed to load image from '{img_path}'."
+        fine_bbox = self.detect_face_from_opencv_img(img) # here img is bgr
+        if fine_bbox is None:
+            logging.warning(f"Warning: No face detected in '{img_path}'.")
+        else:
+            fine_bbox.update({"img_path":img_path})
+        return fine_bbox
+    
+
+class SLPT_Tooler():
+    def __init__(self):
+        self.slpt = SLPT_Detector()
+        
+    def draw_result(self, vis_img, fine_box):
+        left_top = fine_box['box'][:2]
+        right_bottom = [left_top[0] + fine_box['box'][2], left_top[1] + fine_box['box'][3]]
+        cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
+
+        if "coarse_bbox" in fine_box.keys():
+            coarse_box = fine_box['coarse_bbox']
+            coarse_left_top = [int(coarse_box[0]), int(coarse_box[1])]
+            coarse_right_bottom = [int(coarse_box[2]), int(coarse_box[3])]
+            cv2.rectangle(vis_img, coarse_left_top, coarse_right_bottom, (0, 0, 255), 2)
+
+        draw_landmark(fine_box['landmark98'], vis_img)
+
+    def vis_result_from_img(self, root_folder, fine_box):
+        img_path = fine_box['img_path']
+        img = cv2.imread(img_path)
+        assert img is not None, f"Error: Failed to load image from '{img_path}'."
+
+        file_name = os.path.basename(img_path)
+        output_folder = os.path.join(root_folder, os.path.dirname(img_path))
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, file_name)
+
+        vis_img = img.copy()
+        self.draw_result(vis_img, fine_box) 
+        cv2.imwrite(output_path, vis_img)
+
+    def vis_results_from_folder(self, root_folder, results):
+        for bbox in results:
+            if bbox is None:
+                continue
+            img_path = bbox['img_path']
+            output_folder = os.path.join(root_folder, os.path.dirname(img_path))
+            os.makedirs(output_folder, exist_ok=True)
+            output_path = os.path.join(output_folder, os.path.basename(img_path))
+
+            vis_img = cv2.imread(img_path)
+            self.draw_result(vis_img, bbox)
+            cv2.imwrite(output_path, vis_img)
+
+    def detect_vis_face_from_video(self, root_dir, video_path):
+        """
+            draw single box from video frame
+            It will save frames in root_dir/video_path/
+            Args:
+                root_dir: str, output root dir
+                video_path: str, input video path
+        """
         cap = cv2.VideoCapture(video_path)
         im_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         im_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        frame_count = 0  # 记录帧号
-        output_path = "SLPT-master/data/result_video/output_video.mp4"  # 输出视频的路径和名称
 
-        # 创建输出视频的写入对象
+        video_name = os.path.basename(video_path)[:-4]
+        output_folder = os.path.join(root_dir, video_name)
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, "output_video.mp4")
+
         fourcc = cv2.VideoWriter_fourcc(*'MJPG')
         out = cv2.VideoWriter(output_path, fourcc, 20.0, (im_width, im_height))
 
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        ret, frame = cap.read()
+        frame_count = 0
+        while ret:
+            bbox = self.slpt.detect_face_from_opencv_img(frame)
+            if bbox is None:
+                continue
+            vis_img = frame.copy()
+            left_top = bbox['box'][:2]
+            right_bottom = [left_top[0] + bbox['box'][2], left_top[1] + bbox['box'][3]]
+            cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
+            draw_landmark(bbox['landmark98'], vis_img)
 
-            bbox = self.detect_faces_from_opencv_img(frame)
-            if bbox is not None:
-                vis_img = frame.copy()
-                left_top = bbox['box'][:2]
-                right_bottom = [left_top[0] + bbox['box'][2], left_top[1] + bbox['box'][3]]
-                cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
-                draw_landmark(bbox['landmark98'], vis_img)
-                out.write(vis_img)
+            out.write(vis_img)
+            cv2.imwrite(os.path.join(output_folder, f"vis_frame_{frame_count}.jpg"), vis_img)
 
             frame_count += 1
+            ret, frame = cap.read()
 
         cap.release()
         out.release()
         cv2.destroyAllWindows()
-    
-    def detect_faces_from_opencv_img(self, img):
-        coarse_bbox = self.detect_faces(img)
-        crop_img, trans = self.adjust_boxes(img, coarse_bbox)
-        fine_bbox = self.detect_faces_via_landmarks(crop_img, trans, coarse_bbox)
-        return fine_bbox
 
-    def detect_faces_from_img_path(self, img_path):
-        img = cv2.imread(img_path)
-        return self.detect_faces_from_opencv_img(img)
-
-    def detect_faces_from_folder(self, folder):
+    def detect_faces_from_folder_recur_old(self,folder_path):
+        logging.basicConfig(filename='output.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
         results = []
-        for filename in os.listdir(folder):
-            if filename.endswith(".jpg") or filename.endswith(".jpeg") or filename.endswith(".png"):
-                img_path = os.path.join(folder, filename)
-                bbox = self.detect_faces_from_img_path(img_path)
-                results.append(bbox)
-                # self.vis_result(img_path,bbox)
-        return results
-    
-    def vis_result(self, vis_img,fine_box):
-        left_top = fine_box['box'][:2]
-        right_bottom = [left_top[0] + fine_box['box'][2], left_top[1] + fine_box['box'][3]]
-        cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
+        aspect_ratio = []
+        for root, dirs, files in os.walk(folder_path):
+            for file in files:
+                if file.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    img_path = os.path.join(root, file)
+                    bbox = self.slpt.detect_face_from_img_path(img_path)
+                    if bbox is not None:
+                        aspect_r = bbox['box'][2] / bbox['box'][3]
+                        if aspect_r > 1.15 or aspect_r < 0.85:
+                            bbox.update({"img_path": img_path})
+                            results.append(bbox)
+                            # print(img_path)
+                            print(bbox['img_path'])
+                        aspect_ratio.append(aspect_r)
         
-        draw_landmark(fine_box['landmark98'], vis_img)
+        aspect_ratio = np.array(aspect_ratio)
+        np.save("aspect.npy", aspect_ratio)
+        print(len(results))
+        return results
 
-    def vis_result_from_img(self, img_path, fine_box):
-        img = cv2.imread(img_path)
-        if img is None:
-            print(f"Error: Failed to load image from '{img_path}'.")
-            return
+    def detect_faces_from_folder_recur(self, folder_path):
+        logging.basicConfig(filename='output.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+        all_results = []
 
-        file_name = os.path.basename(img_path)
-        vis_img = img.copy()
-        self.vis_result(vis_img, fine_box)  
-        output_folder = "data/result_single"
-        os.makedirs(output_folder, exist_ok=True)
-        output_path = os.path.join(output_folder, file_name)
-        cv2.imwrite(output_path, vis_img)
+        def get_all_folders(folder_path):
+            folders = [f.path for f in os.scandir(folder_path) if f.is_dir()]
+            return folders + [subfolder for folder in folders for subfolder in get_all_folders(folder)]
 
+        all_folders = get_all_folders(folder_path)
+        for one_folder in all_folders:
+            all_results += self.detect_faces_from_one_folder(one_folder)
+        return all_results
 
-    def vis_results_from_folder(self, folder, results):
-        # Create output folder if it doesn't exist
-        output_folder = "data/result_folder"
-        os.makedirs(output_folder, exist_ok=True)
-        for img_name, bbox in zip(os.listdir(folder), results):
-            if img_name.endswith(".jpg") or img_name.endswith(".jpeg") or img_name.endswith(".png"):
-                img_path = os.path.join(folder, img_name)
-                vis_img = cv2.imread(img_path)
-                self.vis_result(vis_img, bbox)
-                output_path = os.path.join(output_folder, img_name)
-                cv2.imwrite(output_path, vis_img)
+    def detect_faces_from_one_folder(self, folder_path):
+        """
+            Detect one max face according to the image from one folder
+            folder_results may contains None value, which means no face detected
+            Args:
+                folder_path: str, input folder path
+            Returns:
+                folder_results: list, contains bbox info
+        """
+        folder_results = []
+        for filename in os.listdir(folder_path):
+            if filename.endswith(".jpg") or filename.endswith(".png") or filename.endswith(".jpeg"):
+                img_path = os.path.join(folder_path, filename)
+                folder_results.append(self.slpt.detect_face_from_img_path(img_path))
+        return folder_results
+
 
 if __name__ == '__main__':
-    img_path = "data/data_ori/multi_1.jpg"
-    folder_path = "data/data_ori"
+    img_path = "SLPT_dev/data/data_ori/0002_01.jpg"
+    folder_path = "SLPT_dev/300W_ljy"
     video_path = "36.mp4"
 
-    slpt_detector = SLPT_Detector()
-    bbox = slpt_detector.detect_faces_from_img_path(img_path)
-    slpt_detector.vis_result_from_img(img_path,bbox)
+    rate=[]
+    slpt_detector = SLPT_Tooler()
 
-    results = slpt_detector.detect_faces_from_folder(folder_path)
-    slpt_detector.vis_results_from_folder(folder_path, results)
+    #detect one image
+    img = cv2.imread(img_path)
+    box_info = slpt_detector.slpt.detect_face_from_img_path(img_path)
+    slpt_detector.vis_result_from_img("test_data",box_info)
 
-    slpt_detector.detect_faces_from_video(video_path)
-
-
+    #detect one folder
+    results = slpt_detector.detect_faces_from_folder_recur(folder_path)
+    slpt_detector.vis_results_from_folder("test_data", results)
+    
+    # #detect one video
+    # slpt_detector.detect_vis_face_from_video("test_data", video_path)
+    
