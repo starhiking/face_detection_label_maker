@@ -7,9 +7,13 @@
 
 import argparse
 import os
+import sys
 import cv2
 from mtcnn import MTCNN
 import numpy as np
+sys.path.append('.')  # 将SLPT-master文件夹添加到sys.path中
+from SLPT_dev.SLPT_detector import SLPT_Detector
+
 
 
 class FaceDetecter():
@@ -27,10 +31,9 @@ class FaceDetecter():
         # init network according the net_type
         if self.net_type == "mtcnn":
             self.net = MTCNN()
-        else:
-            # Initialize RetinaNet or other face detection models
-            # TODO
-            pass
+        elif self.net_type == "SLPT":
+            self.net=SLPT_Detector()
+            
 
     def detect_img(self, img_path):
         """
@@ -42,20 +45,20 @@ class FaceDetecter():
         """
         img = cv2.imread(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if self.net_type == "mtcnn":
+            # detect face boxes
+            boxes = self.net.detect_faces(img)
+            # filter useless boxes with rules
+            filtered_boxes = self.filter_boxes(boxes,img)
+            # adjust box size according max width or height (maintain the wh ratio)
+            adjusted_boxes = self.adjust_box_size(filtered_boxes, img.shape[1], img.shape[0])
+            # return box information by return_type
+            box_info = self.convert_to_return_type(adjusted_boxes)
+            return box_info
+        
+        elif self.net_type == "SLPT":
+            box_info=self.net.detect_faces_from_opencv_img(img)
 
-        # detect face boxes
-        boxes = self.net.detect_faces(img)
-
-        # filter useless boxes with rules
-        filtered_boxes = self.filter_boxes(boxes,img)
-
-        # adjust box size according max width or height (maintain the wh ratio)
-        adjusted_boxes = self.adjust_box_size(filtered_boxes, img.shape[1], img.shape[0])
-
-        # return box information by return_type
-        box_info = self.convert_to_return_type(adjusted_boxes)
-
-        return box_info
 
     def filter_boxes(self, boxes, img):
         """
@@ -291,7 +294,7 @@ class FaceDetecter():
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Face Detecting')
-    parser.add_argument('--net_type', default="mtcnn", type=str, choices=["mtcnn", "retinaface"], help='choose network')
+    parser.add_argument('--net_type', default="mtcnn", type=str, choices=["mtcnn", "SLPT"], help='choose network')
     parser.add_argument('--return_type', default="v1", type=str, choices=["v1", "v2", "v3"],
                         help='choose return type')
     parser.add_argument('--scale', default=1.0, type=float, help='the scale of box size')

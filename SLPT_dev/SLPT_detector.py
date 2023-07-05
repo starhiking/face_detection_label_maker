@@ -1,5 +1,7 @@
 import argparse
 import os.path
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
 
 from Config import cfg
 from Config import update_config
@@ -37,7 +39,7 @@ def parse_SLPT_args():
     parser.add_argument('--dataDir', help='data directory', type=str, default='./')
     parser.add_argument('--prevModelDir', help='prev Model directory', type=str, default=None)
 
-    SLPT_args = parser.parse_args()
+    SLPT_args = parser.parse_args(args=[])
 
     return SLPT_args
 
@@ -160,7 +162,7 @@ class SLPT_Detector():
 
         # load face detector
         net = Face_Detector.YuFaceDetectNet(phase='test', size=None)  # initialize detector
-        net = Face_Detector.load_model(net, "Weight/Face_Detector/yunet_final.pth", True)
+        net = Face_Detector.load_model(net, "/media/ljy/ubuntu_disk1/code/face_detection_label_maker/SLPT_dev/Weight/Face_Detector/yunet_final.pth", True)
         net.eval()
         net = net.to(device)
         self.net = net
@@ -172,7 +174,7 @@ class SLPT_Detector():
                                         cfg.TRANSFORMER.FEED_DIM, cfg.WFLW.INITIAL_PATH, cfg)
         model = torch.nn.DataParallel(model, device_ids=cfg.GPUS).cuda()
 
-        checkpoint_file = "Weight/WFLW_6_layer.pth" # os.path.join(args.modelDir, args.checkpoint)
+        checkpoint_file = "SLPT_dev/Weight/WFLW_6_layer.pth" # os.path.join(args.modelDir, args.checkpoint)
         checkpoint = torch.load(checkpoint_file)
         pretrained_dict = {k: v for k, v in checkpoint.items()
                         if k in model.module.state_dict().keys()}

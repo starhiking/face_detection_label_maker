@@ -25,7 +25,9 @@ class Sparse_alignment_network(nn.Module):
         self.initial_path = initial_path
         self.Sample_num = cfg.MODEL.SAMPLE_NUM
 
-        self.initial_points = torch.from_numpy(np.load(initial_path)['init_face'] / 256.0).view(1, num_point, 2).float()
+        # self.initial_points = torch.from_numpy(np.load(initial_path)['init_face'] / 256.0).view(1, num_point, 2).float()
+        self.initial_points = torch.from_numpy(np.load("SLPT_dev/Config/init_98.npz")['init_face'] / 256.0).view(1, num_point, 2).float()
+
         self.initial_points.requires_grad = False
 
         # ROI_creator
