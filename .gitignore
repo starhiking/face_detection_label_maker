@@ -4,3 +4,6 @@
 .vscode/
 */.vscode/
 */data/
+*.log
+*.npy
+naive_data/
