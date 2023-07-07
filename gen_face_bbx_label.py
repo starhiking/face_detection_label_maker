@@ -179,11 +179,9 @@ class FaceDetecter():
             # box_info = (center, width, height)
             box_info = (box['box'][0] + box['box'][2] // 2, box['box'][1] + box['box'][3] // 2,box['box'][2], box['box'][3])
 
-        print(box_info)
-
         return box_info
 
-    def vis_lefttop_rightbottom(self, img_path, box_info):
+    def convert_lefttop_rightbottom(self, img_path, box_info):
         """
         left_top,right_bottom for visualization
 
@@ -194,10 +192,7 @@ class FaceDetecter():
         returns:
                 left_top,right_bottom for visualization
         """
-        img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        # Visualize the result on the image
-        vis_img = img.copy()
+
         if self.return_type == "v1":
             left, top, width, height = box_info  # Assuming box_info is in the format (left_top, width, height)
             right_bottom = (left + width, top + height)
@@ -221,46 +216,45 @@ class FaceDetecter():
     def vis_result_folder(self, left_top, right_bottom,img_path):
         """
         visualize images for folder
-        left_top, right_bottom from vis_lefttop_rightbottom
+        left_top, right_bottom from convert_lefttop_rightbottom
 
         """
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         # Visualize the result on the image
         vis_img = img.copy()
         cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
         # Save the visualization image
-        output_dir = os.path.join(os.path.dirname(img_path), f"vis_{args.return_type}")
+        output_folder = os.path.dirname(img_path)
+        output_dir = os.path.join(os.path.dirname(output_folder), f"vis_{args.return_type}_{args.net_type}")
         os.makedirs(output_dir, exist_ok=True)
         img_name = os.path.basename(img_path)
         output_path = os.path.join(output_dir, f"{img_name}")
-        vis_img = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)  # Correct color space conversion
         cv2.imwrite(output_path, vis_img)
 
 
     def vis_result_singleimage(self, left_top, right_bottom,img_path):
         """
         visualize images for singleimage
-        left_top, right_bottom from vis_lefttop_rightbottom
+        left_top, right_bottom from convert_lefttop_rightbottom
 
         """
         img = cv2.imread(img_path)
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         # Visualize the result on the image
         vis_img = img.copy()
         cv2.rectangle(vis_img, left_top, right_bottom, (0, 255, 255), 2)
         # Save the visualization image
-        output_dir = os.path.join(os.path.dirname(img_path), f"vis_{args.return_type}_singelimage")
+        output_folder = os.path.dirname(img_path)  # 获取img_folder的上一级路径
+        output_dir = os.path.join(os.path.dirname(output_folder), f"vis_{args.return_type}_{args.net_type}_singelimage")
         os.makedirs(output_dir, exist_ok=True)
         img_name = os.path.basename(img_path)
         output_path = os.path.join(output_dir, f"{args.return_type}_{img_name}")
-        vis_img = cv2.cvtColor(vis_img, cv2.COLOR_BGR2RGB)  # Correct color space conversion
         cv2.imwrite(output_path, vis_img)
 
 
     def detect_folder(self, img_folder):
         output_filename = f"output_{args.scale}_{args.net_type}_{args.return_type}.txt"  # 构造输出文件名
-        output_path = os.path.join(img_folder, output_filename)  # 构造输出文件路径
+        output_folder = os.path.dirname(img_folder) 
+        output_path = os.path.join(output_folder, output_filename)  # 构造输出文件路径
         with open(output_path, 'w') as f:
             for filename in os.listdir(img_folder):
                 if filename.endswith(".jpg") or filename.endswith(".png"):
@@ -268,7 +262,7 @@ class FaceDetecter():
                     relative_path = os.path.relpath(img_path, img_folder)  # 获取相对路径
                     box_info = self.detect_img(img_path)
                     f.write(f"{relative_path} {' '.join([str(i) for i in box_info])}\n")
-                    left_top, right_bottom=self.vis_lefttop_rightbottom(img_path,box_info)
+                    left_top, right_bottom=self.convert_lefttop_rightbottom(img_path,box_info)
                     self.vis_result_folder(left_top, right_bottom,img_path)
 
         return box_info
@@ -312,7 +306,7 @@ if __name__ == "__main__":
         info=detector.detect_folder(args.path)
     else:
         info=detector.detect_img(args.path)
-        left_top, right_bottom=detector.vis_lefttop_rightbottom(args.path, info)
+        left_top, right_bottom=detector.convert_lefttop_rightbottom(args.path, info)
         detector.vis_result_singleimage(left_top, right_bottom,args.path)
 
 
