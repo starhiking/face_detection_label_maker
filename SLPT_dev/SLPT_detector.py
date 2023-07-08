@@ -18,6 +18,7 @@ import torchvision.transforms as transforms
 import torch.backends.cudnn as cudnn
 import Face_Detector
 import utils
+import shutil
 
 def parse_SLPT_args():
     parser = argparse.ArgumentParser(description='Video Demo')
@@ -46,7 +47,7 @@ def parse_SLPT_args():
 def draw_landmark(landmark, image):
 
     for (x, y) in (landmark + 0.5).astype(np.int32):
-        cv2.circle(image, (x, y), 3, (0, 255, 0), -1)
+        cv2.circle(image, (x, y), 3, (255,0, 0), -1)
 
     return image
 
@@ -71,8 +72,8 @@ def crop_img(img, bbox, transform):
     return input, trans
 
 def face_detection(img, model, im_width, im_height):
-    args = parse_SLPT_args() # 解析命令行参数
-    device = torch.device(args.device) # 设置设备
+    args = parse_SLPT_args() 
+    device = torch.device(args.device) 
     img = cv2.resize(img, (320, 240), interpolation=cv2.INTER_NEAREST)
     img = np.float32(img)
     img = img.transpose(2, 0, 1)
@@ -143,7 +144,7 @@ def find_max_box(box_array):
             if temp_box >= Max_box:
                 Max_box = temp_box
                 Max_index = index
-        return box_array[Max_index]
+        return box_array[Max_index].copy()
     else:
         return None
 
@@ -267,21 +268,36 @@ class SLPT_Detector():
             Returns:
                 fine_bbox: dict, bbox information contains box (left-top point and wh) and landmark98, None if no face detected
         """
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # TODO test rgb or bgr
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) # test rgb or bgr
         coarse_bbox, coarse_all_dets = self.detect_face(img)
         if coarse_bbox is None:
             return None
         crop_img, trans = self.adjust_boxes(img, coarse_bbox)
         fine_bbox = self.detect_face_via_landmarks(crop_img, trans, coarse_bbox[14])
-        fine_bbox.update({"coarse_bbox":coarse_bbox})
-        fine_bbox.update({'coarse_all_dets':coarse_all_dets})
+        fine_bbox.update({"coarse_bbox":coarse_bbox, 'coarse_all_dets':coarse_all_dets})
         return fine_bbox
     
 def is_logging_configured():
+    """
+        This function checks if the logging is configured.
+        Parameters:
+            None
+        Returns:
+            - True if at least one logging handler is configured.
+            - False if no logging handlers are configured.
+
+    """
     handlers = logging.getLogger().handlers
     return bool(handlers)
 
 def init_Logger(folder_path):
+    """
+        Initializes the logger for logging output.
+        Parameters:
+            folder_path: str, the path to the folder where the log file will be stored.
+        Returns:
+            None
+    """
     folder_name = "_".join(folder_path.split('/'))
     time_str = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_file_path = os.path.join("output_log", f'{folder_name}_output_{time_str}.log')
@@ -299,7 +315,7 @@ class SLPT_Tooler():
             Draw face boxes(coarse_bbox and fine_box) and landmarks
             Args:
                 vis_img: np.ndarray, opencv img
-                fine_box: dict, bbox information contains box and landmark98, None if no face detected
+                fine_box: dict, bbox information contains box, coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected
         """
         left_top = fine_box['box'][:2]
         right_bottom = [left_top[0] + fine_box['box'][2], left_top[1] + fine_box['box'][3]]
@@ -318,7 +334,7 @@ class SLPT_Tooler():
             Visualize single image (including face boxes and landmarks)
             Args:
                 root_folder: str, output root dir
-                fine_box: dict, bbox information contains box and landmark98, None if no face detected
+                fine_box: dict, bbox information contains box, coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected
         """
         if fine_box is None:
             print("Warning: box information is empty!")
@@ -338,10 +354,10 @@ class SLPT_Tooler():
 
     def vis_results_from_folder(self, root_folder, results):
         """
-            Visualize the folder image (including face boxes and landmarks)
+            Visualize the folder image (including facial boxes, largest box and landmarks)
             Args:
                 root_folder: str, output root dir
-                results: list contains dictionary（bbox information contains box， landmark98 and img_path, None if no face detected）
+                results: list contains dictionary（bbox information contains box，coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected）
         """
         for bbox in results:
             if bbox is None:
@@ -354,10 +370,72 @@ class SLPT_Tooler():
             vis_img = cv2.imread(img_path)
             self.draw_result(vis_img, bbox)
             cv2.imwrite(output_path, vis_img)
-    
-    def vis_warning_result_from_one_result(self, fine_bbox, img_path):
-        pass
 
+    def vis_coarse_all_dets_for_one_image(self, root_folder, fine_bbox):
+        """
+            Visualize all detected facial box, largest box and landmarks.
+            here fine_bbox is not None but a dict
+            Args:
+                root_folder: str, output root dir
+                fine_bbox: list contains dictionary（bbox information contains box, coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected）
+        """
+
+        img_path = fine_bbox['img_path']
+        img = cv2.imread(img_path)
+
+        file_name = os.path.basename(img_path)
+        output_folder = os.path.join(root_folder, os.path.dirname(img_path))
+        os.makedirs(output_folder, exist_ok=True)
+        output_path = os.path.join(output_folder, file_name)
+
+        vis_img = img.copy()
+
+        coarse_all_dets = fine_bbox['coarse_all_dets']
+
+        # vis all faces and their confidences
+        if len(coarse_all_dets) > 1:
+            for bbox_det in coarse_all_dets:
+                bbox = bbox_det[:4].copy()
+                bbox[0] = bbox[0] / 320.0 * vis_img.shape[1] + 0.5
+                bbox[2] = bbox[2] / 320.0 * vis_img.shape[1] + 0.5
+                bbox[1] = bbox[1] / 240.0 * vis_img.shape[0] + 0.5
+                bbox[3] = bbox[3] / 240.0 * vis_img.shape[0] + 0.5
+                bbox = bbox.astype(np.int32)
+
+                coarse_left_top = (bbox[0], bbox[1])
+                coarse_right_bottom = (bbox[2], bbox[3])
+                cv2.rectangle(vis_img, coarse_left_top, coarse_right_bottom, (0, 255, 0), 2)
+                text_pos = (bbox[0], bbox[1] + 10)
+                cv2.putText(vis_img, f"{bbox_det[14]:.2f}", text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2, cv2.LINE_AA)
+        
+        # max face (red) will replace the previous face box (green)
+        self.draw_result(vis_img, fine_bbox)
+        cv2.imwrite(output_path, vis_img)
+        
+    def vis_warning_result_from_one_result(self, fine_bbox, img_path):
+        """
+            Visualize all detected facial box, largest box and landmarks.
+            Args:
+                fine_bbox: list contains dictionary（bbox information contains box, coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected）
+                img_path: dir, input dir( fine_bbox is none, without image path)
+        """
+        warn_result_path = "warning_result"
+        os.makedirs(warn_result_path, exist_ok=True)
+
+        # when detect no faces, copy img to warn result folder
+        if fine_bbox is None:
+            # save naive image into the warning result, in function: vis warning result from that img
+            shutil.copy(img_path, warn_result_path)
+        else:
+            num_box = len(fine_bbox["coarse_all_dets"])
+
+            if num_box > 1:
+                # when all_dets contains multiple faces
+                self.vis_coarse_all_dets_for_one_image(warn_result_path, fine_bbox)
+            else:
+                # when aspect_r is wrong
+                self.vis_result_from_img(warn_result_path, fine_bbox)
+    
     def detect_vis_face_from_video(self, root_dir, video_path):
         """
             draw single box from video frame
@@ -406,6 +484,7 @@ class SLPT_Tooler():
             all_results may contains None value, which means no face detected
             Args:
                 folder_path: str, input folder path
+                warn_record: bool, provid warning information in log
             return:
                 all_results: list, imgs' bbox information contains box and landmark98
         """
@@ -428,6 +507,7 @@ class SLPT_Tooler():
             folder_results may contains None value, which means no face detected
             Args:
                 folder_path: str, input folder path
+                warn_record: bool, provid warning information in log
             Returns:
                 folder_results: list, contains bbox info
         """
@@ -446,6 +526,7 @@ class SLPT_Tooler():
             The whole pipeline for detect face from img path
             Args:
                 img_path: str, the path of the image
+                warn_record: bool, provid warning information in log
             Returns:
                 fine_bbox: dict, bbox information contains box and landmark98, None if no face detected
         """
@@ -455,6 +536,7 @@ class SLPT_Tooler():
         img = cv2.imread(img_path)
         if img is None or img.size == 0:
             logging.error(f"Failed to load image from '{img_path}'.")
+            return None
 
         fine_bbox = self.slpt.detect_face_from_opencv_img(img) # here img is bgr
 
@@ -466,44 +548,50 @@ class SLPT_Tooler():
         return fine_bbox
 
     def record_warning_from_single_img_process(self, fine_bbox, img_path):
+        """
+            Record error messages in log and visualize them
+            Args:
+                img_path: str, the path of the image
+                fine_bbox: dict, bbox information, None if no face detected
+        """
         if fine_bbox is None:
             logging.warning(f"No face detected in '{img_path}'.")
-            # TODO save naive image into the warning dataset, in function: vis waring result from that img
+            self.vis_warning_result_from_one_result(fine_bbox, img_path)
             return
 
         coarse_all_dets = fine_bbox["coarse_all_dets"]
         num_box = len(coarse_all_dets)
         is_warn = False
+        warn_txt = ""
 
         if num_box > 1 :
-            logging.warning(f"detect {len(coarse_all_dets)} faces in {img_path}, and use the max box as the sole face result")
             is_warn = True
+            warn_txt += f"detect {len(coarse_all_dets)} faces in {img_path}, and use the max box as the sole face result"
 
         if fine_bbox is not None:
             aspect_r = fine_bbox['box'][2] / fine_bbox['box'][3]
-            if abs(aspect_r - 1) > 0.15:
-                logging.warning(f"The aspect ratio of the face box is incorrect in '{img_path}'.")
+            if abs(aspect_r - 1) > 0.2:
                 is_warn = True
+                warn_txt += f"The aspect ratio of the face box is incorrect in '{img_path}'."
 
         # fine_bbox.update({"is_warn":is_warn})
         if not is_warn:
-            logging.info( f"Successfully detected face in '{img_path}'.")
+            logging.info(f"Successfully detected face in '{img_path}'.")
         else:
-            # TODO function: vis waring result from that img
-            self.vis_result_from_img("warning_result", fine_bbox)
-        
+            logging.warning(warn_txt)
+            self.vis_warning_result_from_one_result(fine_bbox, img_path)        
 
 if __name__ == '__main__':
-    img_path = "naive_data/300W_ljy/image_107.jpg"
-    folder_path = "naive_data/300W_ljy"
+    img_path = "naive_data/try/for_mtcnn/image_003_1.jpg"
+    folder_path = "naive_data/300W" # "naive_data/try"
     video_path = "36.mp4"
 
     slpt_detector = SLPT_Tooler()
 
-    #detect one image
-    img = cv2.imread(img_path)
-    box_info = slpt_detector.detect_face_from_img_path(img_path, warn_record=True)
-    slpt_detector.vis_result_from_img("test_data",box_info)
+    # # detect one image
+    # # img = cv2.imread(img_path)
+    # box_info = slpt_detector.detect_face_from_img_path(img_path, warn_record=True)
+    # slpt_detector.vis_result_from_img("test_data",box_info)
 
     #detect one folder
     init_Logger(folder_path) # logger reset, if not, it will record in previous log file.
@@ -511,5 +599,5 @@ if __name__ == '__main__':
     slpt_detector.vis_results_from_folder("test_data", results_correct)
     
     # #detect one video
-    slpt_detector.detect_vis_face_from_video("test_data", video_path)
+    # slpt_detector.detect_vis_face_from_video("test_data", video_path)
     
