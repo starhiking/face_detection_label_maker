@@ -12,7 +12,7 @@ import cv2
 from mtcnn import MTCNN
 import numpy as np
 sys.path.append('.')  # 将SLPT-master文件夹添加到sys.path中
-from SLPT_dev.SLPT_detector import SLPT_Detector
+from SLPT_dev.SLPT_detector import SLPT_Tooler
 
 
 
@@ -32,8 +32,9 @@ class FaceDetecter():
         if self.net_type == "mtcnn":
             self.net = MTCNN()
         elif self.net_type == "SLPT":
-            self.net=SLPT_Detector()
-            
+            self.net = SLPT_Tooler()
+        else:
+            raise ValueError("Not support network")
 
     def detect_img(self, img_path):
         """
@@ -55,10 +56,6 @@ class FaceDetecter():
             # return box information by return_type
             box_info = self.convert_to_return_type(adjusted_boxes)
             return box_info
-        
-        elif self.net_type == "SLPT":
-            box_info=self.net.detect_faces_from_opencv_img(img)
-
 
     def filter_boxes(self, boxes, img):
         """
@@ -286,6 +283,80 @@ class FaceDetecter():
         return results
 
 
+    def output_txt_from_return_type(self,results,root_dir):
+        """
+            output txt file in SLPT mode, txt format: img_path, box(according to return_type)
+            Args:
+                results: dict, boxes information
+                root_dir: str, output dir
+        """
+        os.makedirs(root_dir,exist_ok=True)
+        output_path_txt=os.path.join(root_dir,f"output_{args.scale}_{args.net_type}_{args.return_type}.txt")
+
+        with open(output_path_txt, 'w') as f:
+            for bbox in results:
+                if bbox is None:
+                    continue
+                adjust_size = self.adjust_box_size_SLTP(bbox)
+                box_txt_info = self.convert_to_return_type_SLPT(adjust_size)
+                img_path = bbox['img_path']
+                self.draw_box_for_SLPT(adjust_size, img_path)
+                f.write(f"{img_path} {' '.join([str(i) for i in box_txt_info])}\n")
+        
+        
+    def draw_box_for_SLPT(self,adjust_size,img_path):
+
+        output_folder = os.path.join("vis_box", os.path.dirname(img_path))
+        os.makedirs(output_folder, exist_ok=True)
+        file_name = os.path.basename(img_path)
+        output_path = os.path.join(output_folder, file_name)
+
+        img=cv2.imread(img_path)
+        vis_img=img.copy()
+        cv2.rectangle(vis_img,(int(adjust_size[0]-adjust_size[2]/2),int(adjust_size[1]-adjust_size[2]/2)),(int(adjust_size[0]+adjust_size[2]/2),int(adjust_size[1]+adjust_size[2]/2)),(255, 0, 255), 2)
+        cv2.imwrite(output_path, vis_img)
+    
+    def adjust_box_size_SLTP(self,bbox):
+        
+        """
+            Adjust the bounding box size based on the scale, return a square box
+            Args:
+                bbox: dict, boxes information(left_top,h,w)
+                self.scale
+            Returns:
+                adjust_size: list, boxes information(left_top,h,w)
+        """
+
+        edge_length = int(max(bbox['box'][2],bbox['box'][3])*self.scale)
+        adjust_size = (int(bbox['box'][0]+bbox['box'][2]/2),int(bbox['box'][1]+bbox['box'][3]/2),edge_length,edge_length)
+        return adjust_size
+ 
+    def convert_to_return_type_SLPT(self,adjust_size):
+
+        """
+        get box information from return_type
+            Args:
+                adjust_size: list, boxes information(left_top,h,w)
+                return_type: choice:[v1,v2,v3], v1 is return left-top point and wh,
+                v2 is return left-top and right-bottom points, v3 is return center point and wh.
+            Returns:
+                3 type information
+        """
+        if self.return_type == "v1":
+            return (int(adjust_size[0]-adjust_size[2]/2),int(adjust_size[1]-adjust_size[2]/2),adjust_size[2],adjust_size[3])
+
+        elif self.return_type == "v2":
+            return (int(adjust_size[0]-adjust_size[2]/2),int(adjust_size[1]-adjust_size[2]/2),int(adjust_size[0]+adjust_size[2]/2),int(adjust_size[1]+adjust_size[2]/2))
+            
+        else :
+            return adjust_size
+
+        
+
+
+
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Face Detecting')
     parser.add_argument('--net_type', default="mtcnn", type=str, choices=["mtcnn", "SLPT"], help='choose network')
@@ -293,7 +364,9 @@ def parse_args():
                         help='choose return type')
     parser.add_argument('--scale', default=1.0, type=float, help='the scale of box size')
     parser.add_argument('--detect_folder', default=False, action='store_true', help="detect folder or img file")
+    parser.add_argument('--detect_video', default=False, action='store_true', help="detect video")
     parser.add_argument('--path', required=True, type=str, help="img file path or folder path")
+    parser.add_argument('--output_path', default="test_data_SLPT_folder", type=str, help="output root folder path")
 
     args = parser.parse_args()
     return args
@@ -302,12 +375,30 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     detector = FaceDetecter(args.net_type, args.return_type, args.scale)
-    if args.detect_folder:
-        info=detector.detect_folder(args.path)
-    else:
-        info=detector.detect_img(args.path)
-        left_top, right_bottom=detector.convert_lefttop_rightbottom(args.path, info)
-        detector.vis_result_singleimage(left_top, right_bottom,args.path)
+    if detector.net_type == "mtcnn":
 
+        if args.detect_folder:
+            # MTCNN: detects and visualizes images from a single folder
+            info=detector.detect_folder(args.path)
+        else:
+            # MTCCN: detects and visualizes single image
+            info=detector.detect_img(args.path)
+            left_top, right_bottom=detector.convert_lefttop_rightbottom(args.path, info)
+            detector.vis_result_singleimage(left_top, right_bottom,args.path)
+    
+    elif detector.net_type == "SLPT":
+        if args.detect_folder:
+            # SLPT: detects and visualizes images from folders
+            # ATTENTION: Visualized results and returns_type are independent
+            results_correct = detector.net.detect_faces_from_folder_recur(args.path,warn_record=True)
+            detector.output_txt_from_return_type(results_correct, "SLPT_txt")
+            detector.net.vis_results_from_folder(args.output_path, results_correct)
 
+        elif args.detect_video:
+            # SLPT: detects and visualizes images from video
+            detector.net.detect_vis_face_from_video(args.output_path, args.path)
 
+        else:
+            # SLPT: detects and visualizes single image 
+            box_info = detector.net.detect_face_from_img_path(args.path, warn_record=True)
+            detector.net.vis_result_from_img(args.output_path,box_info)
