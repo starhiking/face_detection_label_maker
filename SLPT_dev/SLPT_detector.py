@@ -419,22 +419,30 @@ class SLPT_Tooler():
                 fine_bbox: list contains dictionary（bbox information contains box, coarse_all_dets, coarse_bbox, img_path and landmark98, None if no face detected）
                 img_path: dir, input dir( fine_bbox is none, without image path)
         """
-        warn_result_path = "warning_result"
-        os.makedirs(warn_result_path, exist_ok=True)
+
+        warn_result_path_noface="warning_result/No_Face"
+        warn_result_path_mulityface="warning_result/Multi_face"
+        os.makedirs(warn_result_path_mulityface, exist_ok=True)
+        warn_result_path_warningWH="warning_result/Warning_WH"
+        os.makedirs(warn_result_path_warningWH, exist_ok=True)
 
         # when detect no faces, copy img to warn result folder
         if fine_bbox is None:
             # save naive image into the warning result, in function: vis warning result from that img
-            shutil.copy(img_path, warn_result_path)
+            output_folder = os.path.join(warn_result_path_noface, os.path.dirname(img_path))
+            os.makedirs(output_folder, exist_ok=True)
+
+            shutil.copy(img_path, output_folder)
+
         else:
             num_box = len(fine_bbox["coarse_all_dets"])
 
             if num_box > 1:
                 # when all_dets contains multiple faces
-                self.vis_coarse_all_dets_for_one_image(warn_result_path, fine_bbox)
+                self.vis_coarse_all_dets_for_one_image(warn_result_path_mulityface, fine_bbox)
             else:
                 # when aspect_r is wrong
-                self.vis_result_from_img(warn_result_path, fine_bbox)
+                self.vis_result_from_img(warn_result_path_warningWH, fine_bbox)
     
     def detect_vis_face_from_video(self, root_dir, video_path):
         """
