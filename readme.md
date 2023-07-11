@@ -93,7 +93,7 @@ Several folders will be generated to store the results at different stages. Taki
 
 Noted:  aspect_ratio is not normal, detect multi face or no face
 
-![img](example/warning_result/image_091.jpg)![multi face](example/warning_result/image_100_05.jpg)
+![aspect_ratio error](example/warning_result/image_091.jpg)![multi face](example/warning_result/image_100_05.jpg)
 
 ---
 ## Lincese
