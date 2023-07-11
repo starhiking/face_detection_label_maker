@@ -83,10 +83,12 @@ Several folders will be generated to store the results at different stages. Taki
 ![img](example/navie_data/image_091.jpg)![img](example/navie_data/image_100_05.jpg)
 
 2. result(coarse box and landmark) vis
+
 ![img](example/test_data/image_091.jpg)![img](example/test_data/image_100_05.jpg)
 
 
 3. final box vis
+
 ![img](example/vis/image_091.jpg)![img](example/vis/image_100_05.jpg)
 
 4. warning vis
